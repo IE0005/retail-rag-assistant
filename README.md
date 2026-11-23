@@ -15,7 +15,7 @@ with every answer showing exactly which sources it came from.
 
 ## 🚀 Try it live
 
-**[LIVE_APP_LINK_HERE]**
+**[retail-rag-assistant-jfamb2rmsdrpba5q7wu4ph.streamlit.app](https://retail-rag-assistant-jfamb2rmsdrpba5q7wu4ph.streamlit.app)**
 
 Ask it something like *"Why was Random Forest chosen over Extra Trees?"* or
 *"How does Store 20 perform during holidays?"* and see which knowledge-base
@@ -55,6 +55,10 @@ scripts/build_store_profiles.py ──┘                 │
    vector store on disk.
 3. **Retrieval** (`rag_core.retrieve`) — embeds the user's question with
    the same model and returns the top-k nearest chunks by vector distance.
+   Dense embeddings can't tell identifiers apart ("Store 20" and "Store 22"
+   embed almost identically), so when a question names a store, that
+   store's profile is pulled directly with a metadata filter and other
+   stores' profiles are dropped from the similarity results.
 4. **Grounded generation** (`rag_core.answer_question`) — the retrieved
    chunks are placed in the prompt, and Claude is instructed to answer
    using *only* those excerpts, cite the source document for every claim,

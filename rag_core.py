@@ -8,6 +8,7 @@ before the model ever sees it.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -30,6 +31,9 @@ COLLECTION_NAME = "retail_knowledge_base"
 MODEL = os.environ.get("RAG_MODEL", "claude-opus-5")
 MAX_TOKENS = 2048
 TOP_K = 5
+
+STORE_PATTERN = re.compile(r"\bstore\s*#?\s*(\d{1,2})\b", re.IGNORECASE)
+STORE_PROFILE_CHUNKS = 4  # a profile splits into intro + 3 "##" sections
 
 SYSTEM_PROMPT = """You are a retail operations knowledge assistant. You answer questions using
 ONLY the knowledge base excerpts provided to you in each message -- never from
@@ -101,25 +105,52 @@ def _get_collection():
     return client.get_collection(COLLECTION_NAME)
 
 
-def retrieve(query: str, k: int = TOP_K) -> list:
-    """Return the top-k most relevant knowledge-base chunks for a query."""
-    collection = _get_collection()
-    results = collection.query(query_texts=[query], n_results=k)
-
-    chunks = []
-    docs = results["documents"][0]
-    metas = results["metadatas"][0]
-    dists = results["distances"][0]
-    for text, meta, dist in zip(docs, metas, dists):
-        chunks.append(
-            RetrievedChunk(
-                text=text,
-                source=meta.get("source", "unknown"),
-                section=meta.get("section", ""),
-                distance=dist,
-            )
+def _to_chunks(results: dict) -> list:
+    return [
+        RetrievedChunk(
+            text=text,
+            source=meta.get("source", "unknown"),
+            section=meta.get("section", ""),
+            distance=dist,
         )
-    return chunks
+        for text, meta, dist in zip(
+            results["documents"][0], results["metadatas"][0], results["distances"][0]
+        )
+    ]
+
+
+def retrieve(query: str, k: int = TOP_K) -> list:
+    """Return the most relevant knowledge-base chunks for a query.
+
+    Plain vector search can't tell "Store 20" from "Store 22" -- embeddings
+    treat the numbers as nearly identical -- so a question about a specific
+    store would fill its top-k with other stores' profiles and miss the one
+    asked about. When the query names a store, pull that store's profile
+    chunks directly by metadata, and drop other stores' profiles from the
+    similarity results so they can't crowd out or mislead the answer.
+    """
+    collection = _get_collection()
+    similar = _to_chunks(collection.query(query_texts=[query], n_results=k))
+
+    store_ids = sorted({int(n) for n in STORE_PATTERN.findall(query)})
+    if not store_ids:
+        return similar
+
+    wanted = {f"store_profiles/store_{n:02d}.md" for n in store_ids}
+    store_chunks = []
+    for source in sorted(wanted):
+        found = collection.query(
+            query_texts=[query],
+            n_results=STORE_PROFILE_CHUNKS,
+            where={"source": source},
+        )
+        store_chunks.extend(_to_chunks(found))
+
+    general = [
+        c for c in similar if not c.source.startswith("store_profiles/") or c.source in wanted
+    ]
+    seen = {(c.source, c.section) for c in store_chunks}
+    return store_chunks + [c for c in general if (c.source, c.section) not in seen]
 
 
 def _build_context_block(chunks: list) -> str:
