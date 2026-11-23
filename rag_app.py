@@ -12,8 +12,12 @@ from rag_core import answer_question, ensure_knowledge_base_built
 
 st.set_page_config(page_title="Retail Knowledge Base Assistant", page_icon="📚", layout="centered")
 
-with st.spinner("Setting up knowledge base (first run only)..."):
+@st.cache_resource(show_spinner="Setting up knowledge base (first run only)...")
+def _bootstrap():
     ensure_knowledge_base_built()
+
+
+_bootstrap()
 
 
 def _local_default_key() -> str:

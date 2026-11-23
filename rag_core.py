@@ -16,7 +16,13 @@ from pathlib import Path
 import anthropic
 import chromadb
 
+try:
+    import fcntl  # Mac/Linux only, which includes Streamlit Community Cloud
+except ImportError:
+    fcntl = None
+
 ROOT = Path(__file__).parent
+LOCK_PATH = ROOT / ".kb_build.lock"
 DB_DIR = ROOT / "chroma_db"
 STORE_PROFILES_DIR = ROOT / "knowledge_base" / "docs" / "store_profiles"
 COLLECTION_NAME = "retail_knowledge_base"
@@ -60,7 +66,19 @@ def ensure_knowledge_base_built():
     then the main file -- it won't run build_store_profiles.py or ingest.py
     for us, so the app has to be able to bootstrap its own index on a cold
     start rather than assuming someone ran those scripts by hand first.
+
+    Streamlit reruns the script per session, so several runs can hit a cold
+    start at once. They'd race on the model download and on ingest.py's
+    delete/recreate of the collection, so only one run builds; the rest wait
+    on the lock, then find the index already built and skip.
     """
+    with open(LOCK_PATH, "w") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        _build_if_needed()
+
+
+def _build_if_needed():
     if not STORE_PROFILES_DIR.exists() or not any(STORE_PROFILES_DIR.glob("*.md")):
         subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "build_store_profiles.py")], check=True
